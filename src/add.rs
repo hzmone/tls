@@ -5,6 +5,7 @@ use std::{
 };
 use rs_merkle::{
     algorithms::Sha256,
+    MerkleTree,
     Hasher,
 };
 use serde::{Serialize, Deserialize};
@@ -52,7 +53,7 @@ pub fn add<P: AsRef<Path>>(path: P, root: &Path) -> Result<()> {
         .collect();
 
     let serialized_leaves = bincode::serialize(&hashes)
-        .expect("failed to serialize leaves");
+        .expect("failed to serialize merkle leaves");
 
     let staged_file_path = root.join(".tls/.staged");
     let mut file = OpenOptions::new().write(true).create(true).open(staged_file_path)?;
@@ -69,4 +70,17 @@ fn process_file(path: &Path) -> Result<FileInfo> {
     let hash = Sha256::hash(&buffer);
 
     Ok(FileInfo::new(path.to_path_buf(), hash.to_vec()))
+}
+
+pub fn read_merkle<P: AsRef<Path>>(path: P) -> Result<MerkleTree<Sha256>> {
+    let mut file = File::open(path)?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+
+    let hashes: Vec<<Sha256 as Hasher>::Hash> = bincode::deserialize(&buffer)
+        .expect("failed to deserialize merkle leaves");
+
+    let merkle_tree = MerkleTree::<Sha256>::from_leaves(&hashes);
+
+    Ok(merkle_tree)
 }
