@@ -1,6 +1,10 @@
 [package]
 name = "tls"
+<<<<<<< HEAD
 version = "0.3.8"
+=======
+version = "0.3.8"
+>>>>>>> 6c62802dcd749cffc2550ae0a58859849d26e715
 edition = "2021"
 
 [dependencies]
