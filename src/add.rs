@@ -5,7 +5,6 @@ use std::{
 };
 use rs_merkle::{
     algorithms::Sha256,
-    MerkleTree,
     Hasher,
 };
 use serde::{Serialize, Deserialize};

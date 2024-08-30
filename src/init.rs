@@ -1,7 +1,10 @@
-use std::fs::create_dir;
+use std::fs::{
+    File,
+    create_dir,
+};
 use std::io::{
     ErrorKind,
-    Result
+    Result,
 };
 
 pub fn init() -> Result<()> {
@@ -13,5 +16,7 @@ pub fn init() -> Result<()> {
             _ => eprintln!("unknown error occurred: {}", e)
         }
     }
+    File::create(".tls/.staged").unwrap();
+
     Ok(())
 }
