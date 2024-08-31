@@ -1,93 +1,98 @@
 use std::{
-    time::{SystemTime, UNIX_EPOCH},
-    fs::{File, OpenOptions},
-    io::{Write, Read, Result},
+    fs::{File, OpenOptions, create_dir_all},
+    io::{Read, Write, Result},
     path::Path,
 };
-use bincode;
 use rs_merkle::{
-    MerkleTree,
     algorithms::Sha256,
+    MerkleTree,
+    Hasher,
 };
 use serde::{Serialize, Deserialize};
-use sha2::Digest;
-use hex;
+use bincode;
 
-#[derive(Serialize, Deserialize, Debug)]
+const STAGED_PATH: &str = ".tls/.staged";
+const COMMIT_DIR: &str = ".tls/commits";
+const LATEST_COMMIT_PATH: &str = ".tls/latest_commit";
+
+#[derive(Serialize, Deserialize)]
 pub struct Commit {
-    pub id: String,
-    pub timestamp: u64,
-    pub merkle_root: [u8; 32],
-    pub parent_id: Option<String>,
+    pub id: <Sha256 as rs_merkle::Hasher>::Hash,
+    pub parent: Option<<Sha256 as rs_merkle::Hasher>::Hash>,
+    pub message: String,  // Store the commit message
 }
 
 impl Commit {
-    pub fn new(merkle_root: [u8; 32], parent_id: Option<String>) -> Self {
-        let id = generate_commit_id();
-        let timestamp = current_timestamp();
-        Self {
-            id,
-            timestamp,
-            merkle_root,
-            parent_id,
-        }
+    pub fn new(message: String, parent: Option<<Sha256 as rs_merkle::Hasher>::Hash>) -> Self {
+        let id = Sha256::hash(message.as_bytes());  // Simplified ID generation for the commit
+        Self { id, parent, message }
     }
 }
 
-fn generate_commit_id() -> String {
-    let timestamp = current_timestamp();
+pub fn commit(message: String) -> Result<()> {
+    // Ensure the commit directory exists
+    create_dir_all(COMMIT_DIR)?;
 
-    let timestamp_str = timestamp.to_string();
+    // Read the staged Merkle tree leaves
+    let mut merkle_tree = read_merkle_tree(STAGED_PATH)?;
 
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(timestamp_str.as_bytes());
-    let result = hasher.finalize();
+    // Commit the Merkle tree (using rs_merkle's commit logic)
+    merkle_tree.commit();
 
-    hex::encode(result)
-}
+    // Determine the parent commit's ID
+    let parent_commit_id = if Path::new(LATEST_COMMIT_PATH).exists() {
+        let parent_commit = read_commit(LATEST_COMMIT_PATH)?;
+        Some(parent_commit.id)
+    } else {
+        None
+    };
 
-fn current_timestamp() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("Time went backwards apparently. In order to abide by intergalactic law I must arrest you for time travel.\n")
-        .as_secs()
-}
+    // Create a new commit with the provided message
+    let new_commit = Commit::new(message, parent_commit_id);
 
-pub fn create_commit<P: AsRef<Path>>(merkle_tree: &MerkleTree<Sha256>, parent_id: Option<String>, commit_dir: P) -> Result<()> {
-    let merkle_root = merkle_tree.root().unwrap_or_default();
-
-    let commit = Commit::new(merkle_root, parent_id);
-
-    let serialized_commit = bincode::serialize(&commit)
-        .expect("failed to serialize commit");
-
-    let commit_file_path = commit_dir.as_ref().join(format!("{}.commit", commit.id));
-    let mut file = OpenOptions::new().write(true).create(true).open(commit_file_path)?;
-    file.write_all(&serialized_commit)?;
+    // Store the commit metadata (including the commit message)
+    store_commit_metadata(&new_commit)?;
 
     Ok(())
 }
 
-pub fn read_commit<P: AsRef<Path>>(commit_id: &str, commit_dir: P) -> Result<Commit> {
-    let commit_file_path = commit_dir.as_ref().join(format!("{}.commit", commit_id));
-    let mut file = File::open(commit_file_path)?;
+fn read_merkle_tree<P: AsRef<Path>>(path: P) -> Result<MerkleTree<Sha256>> {
+    let mut file = File::open(path)?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+
+    let hashes: Vec<<Sha256 as Hasher>::Hash> = bincode::deserialize(&buffer)
+        .expect("failed to deserialize merkle leaves");
+
+    let merkle_tree = MerkleTree::<Sha256>::from_leaves(&hashes);
+
+    Ok(merkle_tree)
+}
+
+fn read_commit<P: AsRef<Path>>(path: P) -> Result<Commit> {
+    let mut file = File::open(path)?;
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer)?;
 
     let commit: Commit = bincode::deserialize(&buffer)
-        .expect("failed to deserialized commit");
+        .expect("failed to deserialize commit");
 
     Ok(commit)
 }
 
-pub fn rollback<P: AsRef<Path>>(commit_id: &str, commit_dir: P, target_dir: P) -> Result<()> {
-    let commit = read_commit(commit_id, commit_dir)?;
+fn store_commit_metadata(commit: &Commit) -> Result<()> {
+    // Serialize and store the commit metadata
+    let serialized_commit = bincode::serialize(commit)
+        .expect("failed to serialize commit");
 
-    let _root_hash = commit.merkle_root;
+    let commit_file = format!("{}/{}.commit", COMMIT_DIR, hex::encode(commit.id));
+    let commit_path = Path::new(&commit_file);
+    let mut file = OpenOptions::new().write(true).create(true).open(commit_path)?;
+    file.write_all(&serialized_commit)?;
 
-    /*  todo: 
-    * 1: add logic to restore file system from the commit using the merkle tree to verify and restore their states.
-    */
+    // Update the latest commit file
+    let mut latest_commit_file = OpenOptions::new().write(true).create(true).truncate(true).open(LATEST_COMMIT_PATH)?;
+    latest_commit_file.write_all(commit.id.as_slice())?;
 
     Ok(())
 }
